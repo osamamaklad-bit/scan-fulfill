@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14213d">
+<title>Scan to Fulfill</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root {
+    --ink: #14213d;
+    --paper: #f6f7f9;
+    --card: #ffffff;
+    --line: #d9dde5;
+    --muted: #5d667a;
+    --ok: #15803d;
+    --ok-bg: #dcfce7;
+    --warn: #b45309;
+    --warn-bg: #fef3c7;
+    --bad: #b91c1c;
+    --bad-bg: #fee2e2;
+    --accent: #14213d;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--paper); color: var(--ink);
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; background: var(--ink); color: #fff;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header button { background: transparent; color: #fff; border: 1px solid #ffffff55; border-radius: 8px; padding: 6px 10px; font-size: 14px; }
+  main { padding: 12px 12px 140px; max-width: 640px; margin: 0 auto; }
+
+  .orderbar { display: flex; gap: 8px; margin-bottom: 10px; }
+  .orderbar input {
+    flex: 1; min-width: 0; padding: 12px; font-size: 18px; border: 2px solid var(--line);
+    border-radius: 10px; background: var(--card); color: var(--ink);
+  }
+  button.primary {
+    background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+    padding: 12px 16px; font-size: 16px; font-weight: 600;
+  }
+  button.ghost { background: var(--card); color: var(--ink); border: 2px solid var(--line); border-radius: 10px; padding: 12px 14px; font-size: 16px; font-weight: 600; }
+  button:disabled { opacity: .45; }
+
+  #camwrap { background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 10px; display: none; }
+  #camwrap.on { display: block; }
+  #reader { width: 100%; }
+  #reader video { object-fit: cover; }
+
+  #banner {
+    min-height: 52px; display: flex; align-items: center; padding: 10px 14px; border-radius: 10px;
+    font-weight: 600; margin-bottom: 10px; background: var(--card); border: 2px solid var(--line); color: var(--muted);
+  }
+  #banner.ok { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
+  #banner.warn { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+  #banner.bad { background: var(--bad-bg); border-color: var(--bad); color: var(--bad); }
+
+  .ordertitle { display: flex; justify-content: space-between; align-items: baseline; margin: 6px 2px 8px; }
+  .ordertitle strong { font-size: 20px; }
+  .ordertitle span { color: var(--muted); font-size: 14px; }
+
+  .item {
+    display: grid; grid-template-columns: 56px 1fr auto; gap: 10px; align-items: center;
+    background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 10px; margin-bottom: 8px;
+  }
+  .item.part { border-color: var(--warn); }
+  .item.done { border-color: var(--ok); background: #f3fbf5; }
+  .item img, .item .noimg { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; background: #e8ebf0; }
+  .item .t { font-weight: 600; font-size: 15px; line-height: 1.25; }
+  .item .m { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
+  .count { text-align: center; }
+  .count .n { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .item.done .n { color: var(--ok); }
+  .item.part .n { color: var(--warn); }
+  .adj { display: flex; gap: 6px; margin-top: 4px; }
+  .adj button { width: 34px; height: 30px; border: 1px solid var(--line); background: var(--card); border-radius: 8px; font-size: 18px; line-height: 1; color: var(--ink); }
+
+  footer {
+    position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line);
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  footer .row { max-width: 640px; margin: 0 auto; display: flex; gap: 8px; align-items: center; }
+  footer label { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  #fulfillBtn { flex: 1; padding: 16px; font-size: 18px; background: var(--ok); }
+  #fulfillBtn:disabled { background: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 28px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Scan to Fulfill</h1>
+  <button id="settingsBtn">Settings</button>
+</header>
+
+<main>
+  <div class="orderbar">
+    <input id="orderInput" inputmode="numeric" placeholder="Order number" autocomplete="off">
+    <button class="primary" id="loadBtn">Load</button>
+    <button class="ghost" id="camBtn">Camera</button>
+  </div>
+
+  <div id="camwrap"><div id="reader"></div></div>
+  <div id="banner">Scan the order barcode or type the order number.</div>
+
+  <div id="orderTitle" class="ordertitle" hidden>
+    <strong id="orderName"></strong><span id="orderSummary"></span>
+  </div>
+  <div id="list"></div>
+</main>
+
+<footer>
+  <div class="row">
+    <button class="ghost" id="resetBtn">Clear</button>
+    <label><input type="checkbox" id="notify"> Email customer</label>
+    <button class="primary" id="fulfillBtn" disabled>Fulfill</button>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // ---------- storage (API URL and key stay on this phone, not in the code) ----------
+  const store = {
+    get(k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const state = { order: null, items: [], scanner: null, camOn: false, lastCode: '', lastAt: 0, busy: false };
+
+  // ---------- feedback ----------
+  let actx;
+  function beep(freq, ms) {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.frequency.value = freq; o.connect(g); g.connect(actx.destination);
+      g.gain.value = 0.15; o.start(); o.stop(actx.currentTime + ms / 1000);
+    } catch (e) {}
+  }
+  function feedback(kind) {
+    if (kind === 'ok') { beep(880, 90); if (navigator.vibrate) navigator.vibrate(40); }
+    else if (kind === 'warn') { beep(520, 160); if (navigator.vibrate) navigator.vibrate([60, 40, 60]); }
+    else { beep(200, 350); if (navigator.vibrate) navigator.vibrate([200, 80, 200]); }
+  }
+  function say(msg, kind) {
+    const b = $('banner');
+    b.className = kind || '';
+    b.textContent = msg;
+  }
+
+  // ---------- API ----------
+  async function api(payload) {
+    const url = store.get('apiUrl'), key = store.get('appKey');
+    if (!url || !key) { openSettings(); throw new Error('Set the API URL and key in Settings'); }
+    // No Content-Type header: keeps it a "simple" request so Apps Script needs no CORS preflight
+    const res = await fetch(url, { method: 'POST', body: JSON.stringify(Object.assign({ key: key }, payload)) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+
+  // ---------- order ----------
+  function orderNumberFrom(text) {
+    const m = String(text).match(/\d{3,}/);
+    return m ? m[0] : String(text).trim();
+  }
+
+  async function loadOrder(raw) {
+    if (state.busy) return;
+    const q = orderNumberFrom(raw);
+    if (!q) return;
+    state.busy = true;
+    say('Loading order ' + q + '...');
+    try {
+      const data = await api({ action: 'getOrder', query: q });
+      state.order = data.order;
+      state.items = data.items.map((i) => Object.assign({ got: 0 }, i));
+      $('orderInput').value = '';
+      render();
+      say('Order ' + data.order.name + ' loaded. Scan the items.', 'ok');
+      feedback('ok');
+    } catch (e) {
+      say(e.message, 'bad'); feedback('bad');
+    } finally { state.busy = false; }
+  }
+
+  // ---------- scanning ----------
+  function norm(s) { return String(s || '').trim().toLowerCase(); }
+
+  function onScan(code) {
+    const now = Date.now();
+    if (code === state.lastCode && now - state.lastAt < 1500) return; // same frame burst
+    state.lastCode = code; state.lastAt = now;
+
+    if (!state.order) { loadOrder(code); return; }
+
+    const c = norm(code);
+    const item = state.items.find((i) => (i.barcode && norm(i.barcode) === c) || (i.sku && norm(i.sku) === c));
+    if (!item) {
+      say('Not in this order: ' + code, 'bad'); feedback('bad'); return;
+    }
+    if (item.got >= item.need) {
+      say('Too many: ' + item.title + ' (need ' + item.need + ')', 'bad'); feedback('bad'); return;
+    }
+    item.got++;
+    render();
+    const left = totalNeed() - totalGot();
+    if (left === 0) { say('All items scanned. Ready to fulfill.', 'ok'); feedback('ok'); }
+    else { say(item.title + ': ' + item.got + ' of ' + item.need, item.got === item.need ? 'ok' : 'warn'); feedback(item.got === item.need ? 'ok' : 'warn'); }
+  }
+
+  async function toggleCamera() {
+    if (state.camOn) { await stopCamera(); return; }
+    $('camwrap').classList.add('on');
+    try {
+      const F = Html5QrcodeSupportedFormats;
+      state.scanner = new Html5Qrcode('reader', {
+        formatsToSupport: [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.ITF, F.QR_CODE],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      });
+      await state.scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 280, height: 130 } },
+        onScan, function () {}
+      );
+      state.camOn = true; $('camBtn').textContent = 'Stop';
+    } catch (e) {
+      $('camwrap').classList.remove('on');
+      say('Camera blocked. Allow camera access and use an https page.', 'bad');
+    }
+  }
+  async function stopCamera() {
+    try { if (state.scanner) { await state.scanner.stop(); state.scanner.clear(); } } catch (e) {}
+    state.camOn = false; $('camBtn').textContent = 'Camera'; $('camwrap').classList.remove('on');
+  }
+
+  // ---------- render ----------
+  const totalNeed = () => state.items.reduce((s, i) => s + i.need, 0);
+  const totalGot = () => state.items.reduce((s, i) => s + i.got, 0);
+
+  function render() {
+    const list = $('list');
+    $('orderTitle').hidden = !state.order;
+    if (!state.order) { list.innerHTML = '<div class="empty">No order loaded.</div>'; $('fulfillBtn').disabled = true; return; }
+    $('orderName').textContent = state.order.name;
+    $('orderSummary').textContent = totalGot() + ' of ' + totalNeed() + ' items';
+    list.innerHTML = '';
+    state.items.forEach(function (it, idx) {
+      const cls = it.got >= it.need ? 'done' : it.got > 0 ? 'part' : '';
+      const el = document.createElement('div');
+      el.className = 'item ' + cls;
+      const img = it.image ? '<img src="' + it.image.replace(/"/g, '') + '" alt="">' : '<div class="noimg"></div>';
+      el.innerHTML = img +
+        '<div><div class="t"></div><div class="m"></div></div>' +
+        '<div class="count"><div class="n">' + it.got + '/' + it.need + '</div>' +
+        '<div class="adj"><button data-i="' + idx + '" data-d="-1" aria-label="Remove one">&minus;</button>' +
+        '<button data-i="' + idx + '" data-d="1" aria-label="Add one">+</button></div></div>';
+      el.querySelector('.t').textContent = it.title;
+      el.querySelector('.m').textContent = [it.sku && 'SKU ' + it.sku, it.barcode ? it.barcode : 'no barcode'].filter(Boolean).join('  ');
+      list.appendChild(el);
+    });
+    $('fulfillBtn').disabled = totalGot() !== totalNeed();
+  }
+
+  $('list').addEventListener('click', function (e) {
+    const b = e.target.closest('button[data-i]');
+    if (!b) return;
+    const it = state.items[+b.dataset.i], d = +b.dataset.d;
+    it.got = Math.max(0, Math.min(it.need, it.got + d));
+    render();
+  });
+
+  // ---------- fulfill ----------
+  $('fulfillBtn').addEventListener('click', async function () {
+    if (state.busy) return;
+    state.busy = true; $('fulfillBtn').disabled = true;
+    say('Fulfilling ' + state.order.name + '...');
+    try {
+      await api({
+        action: 'fulfill',
+        notify: $('notify').checked,
+        items: state.items.map((i) => ({ foId: i.foId, foliId: i.foliId, qty: i.got }))
+      });
+      feedback('ok');
+      const name = state.order.name;
+      state.order = null; state.items = []; render();
+      say('Order ' + name + ' fulfilled. Scan the next order.', 'ok');
+    } catch (e) {
+      say(e.message, 'bad'); feedback('bad'); $('fulfillBtn').disabled = false;
+    } finally { state.busy = false; }
+  });
+
+  $('resetBtn').addEventListener('click', function () {
+    state.order = null; state.items = []; render();
+    say('Scan the order barcode or type the order number.');
+  });
+  $('loadBtn').addEventListener('click', function () { loadOrder($('orderInput').value); });
+  $('orderInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadOrder(e.target.value); });
+  $('camBtn').addEventListener('click', toggleCamera);
+
+  // ---------- settings ----------
+  function openSettings() {
+    const url = prompt('Apps Script web app URL', store.get('apiUrl'));
+    if (url !== null) store.set('apiUrl', url.trim());
+    const key = prompt('App key', store.get('appKey'));
+    if (key !== null) store.set('appKey', key.trim());
+  }
+  $('settingsBtn').addEventListener('click', openSettings);
+
+  render();
+  if (!store.get('apiUrl')) say('Open Settings and enter the API URL and app key.', 'warn');
+})();
+</script>
+</body>
+</html>
