@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#14213d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Fulfill">
 <title>Scan to Fulfill</title>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
@@ -90,6 +95,20 @@
   #fulfillBtn { flex: 1; padding: 16px; font-size: 18px; background: var(--ok); }
   #fulfillBtn:disabled { background: var(--muted); }
   .empty { color: var(--muted); text-align: center; padding: 28px 8px; }
+
+  .chips { display: flex; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
+  .chips button { border: 2px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 6px 14px; font-size: 14px; font-weight: 600; }
+  .chips button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .ord { display: flex; justify-content: space-between; gap: 10px; align-items: center; width: 100%; text-align: left;
+    background: var(--card); border: 2px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 8px; color: var(--ink); font: inherit; }
+  .ord .a { font-weight: 800; font-size: 18px; }
+  .ord .b { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .ord .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+  .pill.u { background: var(--bad-bg); color: var(--bad); }
+  .pill.p { background: var(--warn-bg); color: var(--warn); }
+  .pill.o { background: #e8ebf0; color: var(--muted); }
+  .ord .q { text-align: right; font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .ord .q b { display: block; font-size: 20px; color: var(--ink); }
 </style>
 </head>
 <body>
@@ -106,7 +125,18 @@
   </div>
 
   <div id="camwrap"><div id="reader"></div></div>
-  <div id="banner">Scan the order barcode or type the order number.</div>
+  <div id="banner">Pick an order, scan its barcode, or type the number.</div>
+
+  <div id="openOrders">
+    <div class="ordertitle"><strong>Open orders</strong><span id="ordersCount"></span></div>
+    <div class="chips" id="chips">
+      <button data-f="all" class="on">All</button>
+      <button data-f="UNFULFILLED">Unfulfilled</button>
+      <button data-f="PARTIALLY_FULFILLED">Partial</button>
+      <button id="refreshBtn" aria-label="Refresh">&#8635; Refresh</button>
+    </div>
+    <div id="orderList"></div>
+  </div>
 
   <div id="orderTitle" class="ordertitle" hidden>
     <strong id="orderName"></strong><span id="orderSummary"></span>
@@ -131,7 +161,7 @@
   };
 
   const $ = (id) => document.getElementById(id);
-  const state = { order: null, items: [], scanner: null, camOn: false, lastCode: '', lastAt: 0, busy: false };
+  const state = { orders: [], filter: 'all', order: null, items: [], scanner: null, camOn: false, lastCode: '', lastAt: 0, busy: false };
 
   // ---------- feedback ----------
   let actx;
@@ -190,6 +220,59 @@
     } finally { state.busy = false; }
   }
 
+  // ---------- open orders list ----------
+  async function loadList() {
+    $('ordersCount').textContent = 'loading...';
+    try {
+      const data = await api({ action: 'listOrders' });
+      state.orders = data.orders;
+    } catch (e) {
+      state.orders = [];
+      say(e.message, 'bad');
+    }
+    renderOrders();
+  }
+
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    return d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function renderOrders() {
+    const box = $('orderList');
+    const term = $('orderInput').value.replace(/[^0-9a-z]/gi, '').toLowerCase();
+    const rows = state.orders.filter(function (o) {
+      if (state.filter !== 'all' && o.status !== state.filter) return false;
+      return !term || o.name.replace(/[^0-9a-z]/gi, '').toLowerCase().indexOf(term) !== -1;
+    });
+    $('ordersCount').textContent = rows.length + (rows.length === 1 ? ' order' : ' orders');
+    box.innerHTML = '';
+    if (!rows.length) { box.innerHTML = '<div class="empty">No orders to show.</div>'; return; }
+    rows.forEach(function (o) {
+      const b = document.createElement('button');
+      b.className = 'ord';
+      const pillCls = o.status === 'UNFULFILLED' ? 'u' : o.status === 'PARTIALLY_FULFILLED' ? 'p' : 'o';
+      const pillTxt = o.status === 'UNFULFILLED' ? 'Unfulfilled' : o.status === 'PARTIALLY_FULFILLED' ? 'Partial' : o.status.replace(/_/g, ' ').toLowerCase();
+      b.innerHTML = '<div><div class="a"></div><div class="b"></div><div style="margin-top:6px"><span class="pill ' + pillCls + '">' + pillTxt + '</span></div></div>' +
+        '<div class="q"><b></b>items</div>';
+      b.querySelector('.a').textContent = o.name;
+      b.querySelector('.b').textContent = [o.customer, o.city, fmtDate(o.createdAt)].filter(Boolean).join(' · ');
+      b.querySelector('.q b').textContent = o.qty;
+      b.addEventListener('click', function () { loadOrder(o.name); });
+      box.appendChild(b);
+    });
+  }
+
+  $('chips').addEventListener('click', function (e) {
+    const b = e.target.closest('button[data-f]');
+    if (!b) return;
+    state.filter = b.dataset.f;
+    document.querySelectorAll('#chips button[data-f]').forEach(function (x) { x.classList.toggle('on', x === b); });
+    renderOrders();
+  });
+  $('refreshBtn').addEventListener('click', loadList);
+  $('orderInput').addEventListener('input', renderOrders);
+
   // ---------- scanning ----------
   function norm(s) { return String(s || '').trim().toLowerCase(); }
 
@@ -247,6 +330,7 @@
   function render() {
     const list = $('list');
     $('orderTitle').hidden = !state.order;
+    $('openOrders').hidden = !!state.order;
     if (!state.order) { list.innerHTML = '<div class="empty">No order loaded.</div>'; $('fulfillBtn').disabled = true; return; }
     $('orderName').textContent = state.order.name;
     $('orderSummary').textContent = totalGot() + ' of ' + totalNeed() + ' items';
@@ -291,6 +375,7 @@
       const name = state.order.name;
       state.order = null; state.items = []; render();
       say('Order ' + name + ' fulfilled. Scan the next order.', 'ok');
+      loadList();
     } catch (e) {
       say(e.message, 'bad'); feedback('bad'); $('fulfillBtn').disabled = false;
     } finally { state.busy = false; }
@@ -298,7 +383,8 @@
 
   $('resetBtn').addEventListener('click', function () {
     state.order = null; state.items = []; render();
-    say('Scan the order barcode or type the order number.');
+    say('Pick an order, scan its barcode, or type the number.');
+    renderOrders();
   });
   $('loadBtn').addEventListener('click', function () { loadOrder($('orderInput').value); });
   $('orderInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadOrder(e.target.value); });
@@ -313,8 +399,11 @@
   }
   $('settingsBtn').addEventListener('click', openSettings);
 
+  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
+
   render();
   if (!store.get('apiUrl')) say('Open Settings and enter the API URL and app key.', 'warn');
+  else loadList();
 })();
 </script>
 </body>
