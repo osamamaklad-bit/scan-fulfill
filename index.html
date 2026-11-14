@@ -109,6 +109,20 @@
   .pill.o { background: #e8ebf0; color: var(--muted); }
   .ord .q { text-align: right; font-size: 13px; color: var(--muted); white-space: nowrap; }
   .ord .q b { display: block; font-size: 20px; color: var(--ink); }
+
+  /* ---------- mode switch (fulfill / returns) ---------- */
+  .modes { display: flex; gap: 4px; padding: 4px; margin-bottom: 10px; background: var(--card); border: 2px solid var(--line); border-radius: 12px; }
+  .modes button { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 10px; border-radius: 8px; font-size: 16px; font-weight: 700; }
+  .modes button.on { background: var(--ink); color: #fff; }
+  :root { --ret: #9a3412; }
+  body.ret header { background: var(--ret); }
+  body.ret .modes button.on { background: var(--ret); }
+  body.ret #fulfillBtn { background: var(--ret); }
+  body.ret #fulfillBtn:disabled { background: var(--muted); }
+  .retopts { display: none !important; margin-bottom: 8px; }
+  body.ret .retopts { display: flex !important; }
+  .retopts select { flex: 1; min-width: 0; padding: 10px; font-size: 15px; border: 2px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
+  body.ret main { padding-bottom: 200px; }
 </style>
 </head>
 <body>
@@ -118,6 +132,11 @@
 </header>
 
 <main>
+  <div class="modes" id="modes">
+    <button data-m="fulfill" class="on">Fulfill</button>
+    <button data-m="return">Returns</button>
+  </div>
+
   <div class="orderbar">
     <input id="orderInput" inputmode="numeric" placeholder="Order number" autocomplete="off">
     <button class="primary" id="loadBtn">Load</button>
@@ -145,6 +164,21 @@
 </main>
 
 <footer>
+  <div class="row retopts">
+    <select id="reason" aria-label="Return reason">
+      <option value="UNKNOWN">Reason: not given</option>
+      <option value="UNWANTED">Customer changed their mind</option>
+      <option value="DEFECTIVE">Damaged or defective</option>
+      <option value="WRONG_ITEM">Wrong item sent</option>
+      <option value="NOT_AS_DESCRIBED">Not as described</option>
+      <option value="SIZE_TOO_SMALL">Size too small</option>
+      <option value="SIZE_TOO_LARGE">Size too large</option>
+      <option value="STYLE">Style</option>
+      <option value="COLOR">Color</option>
+      <option value="OTHER">Other</option>
+    </select>
+    <label><input type="checkbox" id="restock" checked> Restock</label>
+  </div>
   <div class="row">
     <button class="ghost" id="resetBtn">Clear</button>
     <label><input type="checkbox" id="notify"> Email customer</label>
@@ -161,7 +195,13 @@
   };
 
   const $ = (id) => document.getElementById(id);
-  const state = { orders: [], filter: 'all', order: null, items: [], scanner: null, camOn: false, lastCode: '', lastAt: 0, busy: false };
+  const state = { mode: 'fulfill', orders: [], filter: 'all', order: null, items: [], scanner: null, camOn: false, lastCode: '', lastAt: 0, busy: false };
+  const isRet = () => state.mode === 'return';
+  function idleMsg() {
+    return isRet()
+      ? 'Returns: scan the order barcode on the packing slip, or type the number.'
+      : 'Pick an order, scan its barcode, or type the number.';
+  }
 
   // ---------- feedback ----------
   let actx;
@@ -208,12 +248,19 @@
     state.busy = true;
     say('Loading order ' + q + '...');
     try {
-      const data = await api({ action: 'getOrder', query: q });
+      const data = await api({ action: isRet() ? 'getReturnable' : 'getOrder', query: q });
+      if (isRet() && !data.items.length) {
+        say('Order ' + data.order.name + ' has nothing to return (not shipped yet, or already returned).', 'bad');
+        feedback('bad');
+        return;
+      }
       state.order = data.order;
       state.items = data.items.map((i) => Object.assign({ got: 0 }, i));
       $('orderInput').value = '';
       render();
-      say('Order ' + data.order.name + ' loaded. Scan the items.', 'ok');
+      say(isRet()
+        ? 'Order ' + data.order.name + ': scan each item being returned.'
+        : 'Order ' + data.order.name + ' loaded. Scan the items.', 'ok');
       feedback('ok');
     } catch (e) {
       say(e.message, 'bad'); feedback('bad');
@@ -284,17 +331,26 @@
     if (!state.order) { loadOrder(code); return; }
 
     const c = norm(code);
-    const item = state.items.find((i) => (i.barcode && norm(i.barcode) === c) || (i.sku && norm(i.sku) === c));
-    if (!item) {
-      say('Not in this order: ' + code, 'bad'); feedback('bad'); return;
+    const matches = state.items.filter((i) => (i.barcode && norm(i.barcode) === c) || (i.sku && norm(i.sku) === c));
+    if (!matches.length) {
+      say((isRet() ? 'Not returnable on this order: ' : 'Not in this order: ') + code, 'bad'); feedback('bad'); return;
     }
-    if (item.got >= item.need) {
-      say('Too many: ' + item.title + ' (need ' + item.need + ')', 'bad'); feedback('bad'); return;
+    // The same product can be on more than one line (e.g. shipped in two parcels): fill the first line with room left
+    const item = matches.find((i) => i.got < i.need);
+    if (!item) {
+      const need = matches.reduce((s, i) => s + i.need, 0);
+      say(isRet()
+        ? 'Too many: only ' + need + ' ' + matches[0].title + ' can be returned'
+        : 'Too many: ' + matches[0].title + ' (need ' + need + ')', 'bad');
+      feedback('bad'); return;
     }
     item.got++;
     render();
     const left = totalNeed() - totalGot();
-    if (left === 0) { say('All items scanned. Ready to fulfill.', 'ok'); feedback('ok'); }
+    if (isRet()) {
+      say(item.title + ': returning ' + item.got + ' of ' + item.need + (left === 0 ? '. Every returnable item scanned.' : ''), 'ok');
+      feedback('ok');
+    } else if (left === 0) { say('All items scanned. Ready to fulfill.', 'ok'); feedback('ok'); }
     else { say(item.title + ': ' + item.got + ' of ' + item.need, item.got === item.need ? 'ok' : 'warn'); feedback(item.got === item.need ? 'ok' : 'warn'); }
   }
 
@@ -330,10 +386,18 @@
   function render() {
     const list = $('list');
     $('orderTitle').hidden = !state.order;
-    $('openOrders').hidden = !!state.order;
-    if (!state.order) { list.innerHTML = '<div class="empty">No order loaded.</div>'; $('fulfillBtn').disabled = true; return; }
+    $('openOrders').hidden = !!state.order || isRet();
+    $('fulfillBtn').textContent = isRet()
+      ? (totalGot() ? 'Return ' + totalGot() + (totalGot() === 1 ? ' item' : ' items') : 'Return')
+      : 'Fulfill';
+    if (!state.order) {
+      list.innerHTML = '<div class="empty">' + (isRet() ? 'Scan or type an order number to start a return.' : 'No order loaded.') + '</div>';
+      $('fulfillBtn').disabled = true; return;
+    }
     $('orderName').textContent = state.order.name;
-    $('orderSummary').textContent = totalGot() + ' of ' + totalNeed() + ' items';
+    $('orderSummary').textContent = isRet()
+      ? totalGot() + ' to return · ' + totalNeed() + ' returnable'
+      : totalGot() + ' of ' + totalNeed() + ' items';
     list.innerHTML = '';
     state.items.forEach(function (it, idx) {
       const cls = it.got >= it.need ? 'done' : it.got > 0 ? 'part' : '';
@@ -349,7 +413,7 @@
       el.querySelector('.m').textContent = [it.sku && 'SKU ' + it.sku, it.barcode ? it.barcode : 'no barcode'].filter(Boolean).join('  ');
       list.appendChild(el);
     });
-    $('fulfillBtn').disabled = totalGot() !== totalNeed();
+    $('fulfillBtn').disabled = isRet() ? totalGot() === 0 : (totalNeed() === 0 || totalGot() !== totalNeed());
   }
 
   $('list').addEventListener('click', function (e) {
@@ -361,7 +425,35 @@
   });
 
   // ---------- fulfill ----------
-  $('fulfillBtn').addEventListener('click', async function () {
+  $('fulfillBtn').addEventListener('click', function () { if (isRet()) submitReturn(); else submitFulfill(); });
+
+  async function submitReturn() {
+    if (state.busy) return;
+    const n = totalGot(), name = state.order.name;
+    const restock = $('restock').checked;
+    if (!confirm('Create a return for ' + n + (n === 1 ? ' item' : ' items') + ' on ' + name + '?' +
+      (restock ? '\nThe items will be put back into stock.' : '\nThe items will NOT be restocked.'))) return;
+    state.busy = true; $('fulfillBtn').disabled = true;
+    say('Creating return for ' + name + '...');
+    try {
+      const data = await api({
+        action: 'processReturn',
+        orderId: state.order.id,
+        notify: $('notify').checked,
+        restock: restock,
+        reason: $('reason').value,
+        items: state.items.filter((i) => i.got > 0).map((i) => ({ fliId: i.fliId, qty: i.got, locationId: i.locationId || '' }))
+      });
+      feedback('ok');
+      state.order = null; state.items = []; render();
+      say('Return ' + (data.returnName || '') + ' created for ' + name + (restock ? ', items restocked' : '') +
+        '. Issue the refund in Shopify admin.', 'ok');
+    } catch (e) {
+      say(e.message, 'bad'); feedback('bad'); $('fulfillBtn').disabled = false;
+    } finally { state.busy = false; }
+  }
+
+  async function submitFulfill() {
     if (state.busy) return;
     state.busy = true; $('fulfillBtn').disabled = true;
     say('Fulfilling ' + state.order.name + '...');
@@ -379,12 +471,34 @@
     } catch (e) {
       say(e.message, 'bad'); feedback('bad'); $('fulfillBtn').disabled = false;
     } finally { state.busy = false; }
-  });
+  }
 
   $('resetBtn').addEventListener('click', function () {
     state.order = null; state.items = []; render();
-    say('Pick an order, scan its barcode, or type the number.');
+    say(idleMsg());
     renderOrders();
+  });
+
+  // ---------- mode ----------
+  function setMode(m, initial) {
+    if (!initial) {
+      if (m === state.mode || state.busy) return;
+      if (state.order && totalGot() > 0 && !confirm('Discard the scans for ' + state.order.name + '?')) return;
+    }
+    state.mode = m;
+    store.set('mode', m);
+    document.body.classList.toggle('ret', m === 'return');
+    document.querySelectorAll('#modes button').forEach(function (x) { x.classList.toggle('on', x.dataset.m === m); });
+    state.order = null; state.items = [];
+    render();
+    if (!initial) {
+      say(idleMsg());
+      if (m === 'fulfill' && store.get('apiUrl')) loadList();
+    }
+  }
+  $('modes').addEventListener('click', function (e) {
+    const b = e.target.closest('button[data-m]');
+    if (b) setMode(b.dataset.m);
   });
   $('loadBtn').addEventListener('click', function () { loadOrder($('orderInput').value); });
   $('orderInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') loadOrder(e.target.value); });
@@ -401,8 +515,9 @@
 
   if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
 
-  render();
+  setMode(store.get('mode') === 'return' ? 'return' : 'fulfill', true);
   if (!store.get('apiUrl')) say('Open Settings and enter the API URL and app key.', 'warn');
+  else if (isRet()) say(idleMsg());
   else loadList();
 })();
 </script>

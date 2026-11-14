@@ -1,5 +1,5 @@
 // Minimal service worker: makes the app installable and loads the shell fast.
-const CACHE = 'scan-fulfill-v1';
+const CACHE = 'scan-fulfill-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
